@@ -1,0 +1,16 @@
+[Unit]
+Description=groove-id: recognizes the record on the turntable for the LED matrix
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/vinyl-id
+ExecStart=/usr/bin/python3 -u /home/pi/vinyl-id/groove_listen.py
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

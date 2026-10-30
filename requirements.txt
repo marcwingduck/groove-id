@@ -1,0 +1,5 @@
+pillow==11.3.0
+python3-discogs-client==2.10
+requests==2.32.5
+python-dotenv==1.2.1
+mutagen==1.47.0
