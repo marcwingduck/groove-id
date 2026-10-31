@@ -1,9 +1,10 @@
 import argparse
 import json
 import os
-import re
 import shlex
 import subprocess
+
+from discogs_kodi_matcher import ALBUMS_DIR, KODI_HOST, MATCH_MIN, SSH, best_match, parse_albums, plain_artist, tar_stream
 
 # Fingerprints the mp3s of every matched record into Olaf's database on tape.
 # The albums travel from the kodi drive through this machine (ssh kodi | ssh tape),
@@ -11,14 +12,10 @@ import subprocess
 # With --local DIR the albums come from a folder on this machine instead, e.g.
 # downloads that are only good enough to fingerprint and never go to kodi.
 
-KODI_HOST = 'kodi'
 TAPE_HOST = 'tape'
-ALBUMS_DIR = '/media/hdhdhd/audio/albums'
 REMOTE_DIR = 'vinyl-id'  # in tape's home
 TRACKS_FILE = 'tracks.json'
 RELEASES_FILE = 'releases.json'  # covers and colors per release, kept after the mp3s are gone
-# a dropped connection otherwise hangs the run forever, this gives up after a minute
-SSH = ['ssh', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4']
 
 
 def load_tracks():
@@ -34,16 +31,9 @@ def save_tracks(tracks):
     subprocess.run(['scp', '-q', TRACKS_FILE, '{}:{}/{}'.format(TAPE_HOST, REMOTE_DIR, TRACKS_FILE)], check=True)
 
 
-# Discogs tells artists of the same name apart by a number, 'Casey (15)'; the panel and the
-# LCD show the name without it
-discogs_number_prog = re.compile(r' \(\d+\)')
-
-
 def index_release(release, local_dir=None):
     if local_dir:
-        # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and Finder attributes
-        source = subprocess.Popen(['tar', '-C', local_dir, '--no-xattrs', '--exclude', '*.mp4', '-cf', '-', release['folder']],
-                                  stdout=subprocess.PIPE, env=dict(os.environ, COPYFILE_DISABLE='1'))
+        source = tar_stream(local_dir, release['folder'])
     else:
         # ssh hands the command to a remote shell, so names like You're_Not_You need quoting
         source = subprocess.Popen(SSH + [KODI_HOST, 'tar', '-C', ALBUMS_DIR, '-cf', '-', shlex.quote(release['folder'])],
@@ -61,7 +51,7 @@ def index_release(release, local_dir=None):
         name, duration, title = line.split('\t')
         tracks[name] = {
             'release': release['id'],
-            'artist': discogs_number_prog.sub('', release['artist']),
+            'artist': plain_artist(release),
             'album': release['title'],
             'title': title or os.path.splitext(os.path.basename(name))[0],
             'duration': float(duration),
@@ -89,7 +79,6 @@ def update_releases(matches):
 
 def local_releases(matches, local_dir):
     """Releases from matches.json whose album folder is in local_dir, matched like the matcher does."""
-    from discogs_kodi_matcher import MATCH_MIN, best_match, parse_albums
     folders = [f for f in os.listdir(local_dir) if os.path.isdir(os.path.join(local_dir, f))]
     albums = parse_albums(folders)
     releases = []

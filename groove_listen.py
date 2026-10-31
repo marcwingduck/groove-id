@@ -12,7 +12,7 @@ import urllib.request
 # and tells the matrix what plays, with the cover and the bars' colors.
 
 sys.path.insert(0, os.path.expanduser('~/snapserver-lcd'))
-from matrix import encode_text  # noqa: E402  same text handling as the spotify view
+from matrix import track_packet  # noqa: E402  the same packet as the spotify view
 
 ASK_PORT = 4213
 CLIP_PORT = 4212
@@ -71,15 +71,12 @@ def release_art(release_id):
         return None
 
 
-def show(sock, host, track):
+def show(sock, host, track, art):
     """Every recognition is sent; the matrix only pops in a track it hasn't shown."""
-    art = release_art(track['release'])
-    pixels = base64.b64decode(art['art']) if art else bytes(16 * 16 * 3)
-    accent = bytes(art['accent']) if art else bytes([255, 255, 255])
+    pixels = base64.b64decode(art['art']) if art else None
+    accent = art['accent'] if art else [255, 255, 255]
     bars = bytes(art['bars'][0] + art['bars'][1]) if art and art['bars'] else bytes(6)
-    sock.sendto(b'NP\x04V' + pixels + accent + bars
-                + encode_text(track['artist']) + b'\0' + encode_text(track['title']) + b'\0',
-                (host, MATRIX_PORT))
+    sock.sendto(track_packet(b'V', track['artist'], track['title'], pixels, accent, bars), (host, MATRIX_PORT))
 
 
 def tell_lcd(event):
@@ -90,10 +87,9 @@ def tell_lcd(event):
         print('  lcd: {}'.format(e), flush=True)
 
 
-def show_on_lcd(track, offset):
+def show_on_lcd(track, offset, art):
     """The LCD shows artist and title in the cover's accent until the track should be over,
     or until the matrix says stop."""
-    art = release_art(track['release'])
     seconds_left = track['duration'] - offset - CLIP_S  # the clip started at offset and is over by now
     tell_lcd({'event': 'vinyl', 'artist': track['artist'], 'title': track['title'],
               'accent': art['accent'] if art else None, 'seconds': max(seconds_left, 0)})
@@ -123,20 +119,20 @@ def main():
             continue
 
         best = query(raw, name)
-        with open(TRACKS_FILE) as f:
-            tracks = json.load(f)  # reread, the indexer may have added albums
         if best is None or best[0] < MIN_MATCHES:
             print('  no match{}'.format(' ({} fps)'.format(best[0]) if best else ''), flush=True)
             continue
         matches, track, offset = best
-        t = tracks.get(track)
+        with open(TRACKS_FILE) as f:
+            t = json.load(f).get(track)  # reread, the indexer may have added albums
         if t is None:
             print('  {} is not in tracks.json'.format(track), flush=True)
             continue
         print('  {} - {} - {}  at {:.0f} s ({} fps)'.format(
             t['artist'], t['album'], t['title'], offset, matches), flush=True)
-        show(sock, host, t)
-        show_on_lcd(t, offset)
+        art = release_art(t['release'])  # read once: the file holds every cover
+        show(sock, host, t, art)
+        show_on_lcd(t, offset, art)
 
 
 if __name__ == '__main__':

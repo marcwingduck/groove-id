@@ -8,8 +8,8 @@ from mutagen import MutagenError
 from mutagen.id3 import TALB, TDRC, TIT2, TPE1, TPE2, TRCK
 from mutagen.mp3 import MP3
 
-from discogs_kodi_matcher import (ALBUMS_DIR, KODI_HOST, MATCH_MIN, collection, connect, normalize,
-                                  parenthesis_prog, similarity)
+from discogs_kodi_matcher import (ALBUMS_DIR, KODI_HOST, MATCH_MIN, SSH, album_score, collection, connect,
+                                  normalize, plain_artist, release_names, tar_stream)
 
 # Gets a folder of downloaded albums ready for indexing: finds each album in the
 # Discogs collection, renames its folder to Artist__Year__Album with Discogs'
@@ -17,7 +17,6 @@ from discogs_kodi_matcher import (ALBUMS_DIR, KODI_HOST, MATCH_MIN, collection, 
 # Without --apply it only prints what it would do.
 
 number_prog = re.compile(r'^(\d{1,3})[-_\s.]+')
-discogs_suffix_prog = re.compile(r' \(\d+\)')  # 'Acres (2)' -> 'Acres'
 
 
 def parse_folder(name):
@@ -36,8 +35,7 @@ def find_release(artist, album, releases):
     artist, album = normalize(artist), normalize(album)
     best, best_score = None, 0.0
     for release in releases:
-        score = min(similarity(normalize(parenthesis_prog.sub('', release['artist'])), artist),
-                    similarity(normalize(release['title']), album))
+        score = album_score(*release_names(release), artist, album)
         if score > best_score:
             best, best_score = release, score
     return (best, best_score) if best_score >= MATCH_MIN else (None, best_score)
@@ -102,14 +100,11 @@ def tag_album(path, artist, year, album, folder_artist, overwrite):
 
 def upload(base, folder):
     target = '{}/{}'.format(ALBUMS_DIR, folder)
-    if subprocess.run(['ssh', KODI_HOST, 'test', '-e', shlex.quote(target)]).returncode == 0:
+    if subprocess.run(SSH + [KODI_HOST, 'test', '-e', shlex.quote(target)]).returncode == 0:
         print('  already on {}, skipped'.format(KODI_HOST))
         return
-    # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and Finder
-    # attributes the Pi's tar complains about; videos and Finder files stay here
-    pack = subprocess.Popen(['tar', '-C', base, '--no-xattrs', '--exclude', '*.mp4', '--exclude', '.DS_Store', '-cf', '-', folder],
-                            stdout=subprocess.PIPE, env=dict(os.environ, COPYFILE_DISABLE='1'))
-    unpack = subprocess.run(['ssh', KODI_HOST, 'tar', '-C', shlex.quote(ALBUMS_DIR), '-xf', '-'], stdin=pack.stdout)
+    pack = tar_stream(base, folder)
+    unpack = subprocess.run(SSH + [KODI_HOST, 'tar', '-C', shlex.quote(ALBUMS_DIR), '-xf', '-'], stdin=pack.stdout)
     pack.stdout.close()
     if pack.wait() != 0 or unpack.returncode != 0:
         raise RuntimeError('upload of {} failed'.format(folder))
@@ -135,7 +130,7 @@ def main():
         folder_artist, year, album = parsed
         release, score = find_release(folder_artist, album, releases)
         if release:
-            artist = discogs_suffix_prog.sub('', release['artist'])
+            artist = plain_artist(release)
             year, album = original_year(d, release) or year or tagged_year(path), release['title'].strip()
             status = 'discogs {:.2f}'.format(score)
         else:

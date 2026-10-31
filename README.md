@@ -20,6 +20,7 @@ Three machines are involved:
 | `store_album.sh` | `tape` | Unpacks one album to a temporary folder, converts each MP3 to 16 kHz mono and stores it with `olaf_core store` |
 | `groove_listen.py` | `tape` | Waits for the matrix's `clip <reason>` broadcast, fetches the clip, queries Olaf and sends the matrix a `V` datagram with cover, colors, artist and title. It also posts the track to snapserver-lcd on the same Pi, which shows it on the LCD in the cover's accent color until the track is over, or until the matrix broadcasts `stop` (the turntable went silent), which the listener relays |
 | `groove-id.service` | `tape` | Runs the listener at boot |
+| `deploy.sh` | Mac | Copies the listener, `store_album.sh` and the service to `tape`, installs the service and restarts it |
 
 `tracks.json` maps Olaf's track names (`<release id>/<path in the album>`) to release, artist, album, title and duration. `releases.json` holds each release's 16×16 cover and colors, taken from `matches.json`. The indexer only adds to it, so a record stays recognizable with its cover after its MP3s are deleted from `kodi`. Both files are copied to `~/vinyl-id` on `tape`, and the listener rereads them on every match.
 
@@ -63,13 +64,14 @@ make compile_core
 
 Olaf keeps its database in `$HOME/.olaf/db`, so the scripts run it with `HOME=~/vinyl-id`.
 
-The listener as a service:
+The listener, from the Mac, installed as a service and restarted, after every change too:
 
 ```sh
-sudo cp ~/vinyl-id/groove-id.service /etc/systemd/system/
-sudo systemctl enable --now groove-id
-journalctl -u groove-id -f
+./deploy.sh
+ssh tape 'journalctl -u groove-id -f'
 ```
+
+The listener uses snapserver-lcd's `matrix.py` from `~/snapserver-lcd` on `tape`. After a change there, run snapserver-lcd's `deploy.sh` first, then this one, which restarts the listener with the new module.
 
 ## New records
 

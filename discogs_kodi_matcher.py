@@ -16,20 +16,20 @@ from PIL import Image
 
 # the matrix gets vinyl covers exactly like snapserver-lcd's spotify covers
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'snapserver-lcd'))
-from accent_color import get_accent_color_from_bytes  # noqa: E402
+from accent_color import get_accent_color_from_bytes, lit_accent  # noqa: E402
 from matrix import artwork_pixels  # noqa: E402
 
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 personal_access_token = os.getenv('DISCOGS_PERSONAL_ACCESS_TOKEN')
-if not personal_access_token:
-    sys.exit('DISCOGS_PERSONAL_ACCESS_TOKEN must be set in .env')
 # covers come from Spotify where it has the album: Discogs' are often photos of the sleeve,
 # with lamps and stickers in them, and Spotify's match what snapserver-lcd shows when streaming
 spotify_id, spotify_secret = os.getenv('SPOTIFY_CLIENT_ID'), os.getenv('SPOTIFY_CLIENT_SECRET')
 
 KODI_HOST = 'kodi'  # ssh alias for 192.168.0.37
 ALBUMS_DIR = '/media/hdhdhd/audio/albums'
+# a dropped connection otherwise hangs the run forever, this gives up after a minute
+SSH = ['ssh', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4']
 MATCH_MIN = 0.85  # title similarity needed, 0..1
 COVERS_DIR = 'covers'  # downloaded once, reruns reuse them
 SPOTIFY_MATCH_MIN = 0.8  # artist and album similarity a Spotify album needs to be taken
@@ -53,9 +53,18 @@ parenthesis_prog = re.compile(r'[\(\[].*?[\)\]]')
 article_prog = re.compile(r'^(a|the) +')
 # release suffixes that differ between folder and discogs but say nothing about the album
 noise_prog = re.compile(r'\b(ep|lp|2cd|cd|deluxe edition|deluxe|remastered|reissue|advance)\b')
+# Discogs tells artists of the same name apart by a number, 'Casey (15)'; folders, tags, the
+# panel and the LCD show the name without it
+discogs_number_prog = re.compile(r' \(\d+\)')
+
+
+def plain_artist(release):
+    return discogs_number_prog.sub('', release['artist'])
 
 
 def connect():
+    if not personal_access_token:
+        sys.exit('DISCOGS_PERSONAL_ACCESS_TOKEN must be set in .env')
     d = dc.Client('VinylMatch/0.1', user_token=personal_access_token)
 
     me = d.identity()
@@ -83,8 +92,29 @@ def similarity(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
+def release_names(release):
+    """A Discogs release's artist and title, normalized: 'Ghost (2)' -> 'ghost'."""
+    return normalize(release['artist']), normalize(release['title'])
+
+
+def album_score(artist, title, other_artist, other_title):
+    """How well two normalized artist/title pairs match, 0..1; 0 unless the artists alone do."""
+    artist_score = similarity(artist, other_artist)
+    if artist_score < MATCH_MIN:
+        return 0.0
+    return min(artist_score, similarity(title, other_title))
+
+
+def tar_stream(base, folder):
+    """tar of base/folder on stdout, without videos and Finder files. COPYFILE_DISABLE and
+    --no-xattrs keep macOS tar from adding ._ files and Finder attributes the Pi's tar
+    complains about."""
+    return subprocess.Popen(['tar', '-C', base, '--no-xattrs', '--exclude', '*.mp4', '--exclude', '.DS_Store',
+                             '-cf', '-', folder], stdout=subprocess.PIPE, env=dict(os.environ, COPYFILE_DISABLE='1'))
+
+
 def kodi_albums():
-    out = subprocess.run(['ssh', KODI_HOST, 'ls', '-1', ALBUMS_DIR],
+    out = subprocess.run(SSH + [KODI_HOST, 'ls', '-1', ALBUMS_DIR],
                          capture_output=True, text=True, check=True).stdout
     return parse_albums(out.splitlines())
 
@@ -127,8 +157,7 @@ def spotify_token():
 
 def spotify_cover_url(token, release):
     """The largest cover of the Spotify album that matches artist and title, or None."""
-    artist = normalize(parenthesis_prog.sub('', release['artist']))
-    title = normalize(release['title'])
+    artist, title = release_names(release)
     response = requests.get('https://api.spotify.com/v1/search', headers={'Authorization': 'Bearer ' + token},
                             params={'q': '{} {}'.format(artist, title), 'type': 'album', 'limit': 10}, timeout=20)
     response.raise_for_status()
@@ -171,13 +200,6 @@ def rgb(h, s, v=1.0):
     return [round(c * 255) for c in colorsys.hsv_to_rgb(h % 1.0, min(s, 1.0), min(v, 1.0))]
 
 
-def lit_accent(color):
-    """The accent at full brightness, for LEDs. A dark color looks more saturated than its
-    numbers say, so it gains saturation as it's brightened: a dark red stays red, not salmon."""
-    h, s, v = hsv(color)
-    return rgb(h, s ** v if s else 0.0)
-
-
 def second_color(data, accent):
     """The biggest part of the cover besides the accent and black, as (h, s, v), or None."""
     img = Image.open(BytesIO(data)).convert('RGB').resize((128, 128)).quantize(colors=16)
@@ -202,7 +224,7 @@ def album_art(release, token):
     art = {'art': base64.b64encode(artwork_pixels(data)).decode(), 'accent': [255, 255, 255], 'bars': None}
     if not raw:
         return art
-    accent = lit_accent(raw)
+    accent = list(lit_accent(raw))
     art['accent'] = accent
     h, s, _ = hsv(accent)
     second = second_color(data, accent)
@@ -219,14 +241,10 @@ def album_art(release, token):
 
 
 def best_match(release, albums):
-    artist = normalize(parenthesis_prog.sub('', release['artist']))  # 'Ghost (2)' -> 'ghost'
-    title = normalize(release['title'])
+    artist, title = release_names(release)
     best, best_score = None, 0.0
     for album in albums:
-        artist_score = similarity(artist, album['artist'])
-        if artist_score < MATCH_MIN:
-            continue
-        score = min(artist_score, similarity(title, album['title']))
+        score = album_score(artist, title, album['artist'], album['title'])
         if score > best_score:
             best, best_score = album, score
     return best, best_score
