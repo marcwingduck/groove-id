@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 
@@ -33,6 +34,11 @@ def save_tracks(tracks):
     subprocess.run(['scp', '-q', TRACKS_FILE, '{}:{}/{}'.format(TAPE_HOST, REMOTE_DIR, TRACKS_FILE)], check=True)
 
 
+# Discogs tells artists of the same name apart by a number, 'Casey (15)'; the panel and the
+# LCD show the name without it
+discogs_number_prog = re.compile(r' \(\d+\)')
+
+
 def index_release(release, local_dir=None):
     if local_dir:
         # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and Finder attributes
@@ -55,7 +61,7 @@ def index_release(release, local_dir=None):
         name, duration, title = line.split('\t')
         tracks[name] = {
             'release': release['id'],
-            'artist': release['artist'],
+            'artist': discogs_number_prog.sub('', release['artist']),
             'album': release['title'],
             'title': title or os.path.splitext(os.path.basename(name))[0],
             'duration': float(duration),
@@ -105,9 +111,11 @@ def main():
     with open('matches.json') as f:
         matches = json.load(f)
     releases = local_releases(matches, local_dir) if local_dir else matches['found']
-    # the listener on tape takes covers and colors from releases.json
+    # the listener on tape takes covers and colors from releases.json; tracks.json goes along on
+    # every run too, so a copy that failed last time (tape dropping off the network) is mended
     update_releases(matches)
-    subprocess.run(['scp', '-q', 'store_album.sh', RELEASES_FILE, '{}:{}/'.format(TAPE_HOST, REMOTE_DIR)], check=True)
+    files = ['store_album.sh', RELEASES_FILE] + ([TRACKS_FILE] if os.path.exists(TRACKS_FILE) else [])
+    subprocess.run(['scp', '-q'] + files + ['{}:{}/'.format(TAPE_HOST, REMOTE_DIR)], check=True)
 
     tracks = load_tracks()
     done = {t['release'] for t in tracks.values()}
