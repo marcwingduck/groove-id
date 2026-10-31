@@ -43,10 +43,12 @@ On the Mac, with SSH access to `kodi` and `tape`, and snapserver-lcd checked out
 .venv/bin/pip install -r requirements.txt
 ```
 
-`.env` holds a Discogs personal access token (Settings → Developers):
+`.env` holds a Discogs personal access token (Settings → Developers) and, for the covers, the client ID and secret of a Spotify app (developer.spotify.com). Spotify's cover is taken where it has the album, since Discogs' are often photos of the sleeve; without the Spotify keys, or for albums it doesn't have, the Discogs cover is used:
 
 ```
-PERSONAL_ACCESS_TOKEN=...
+DISCOGS_PERSONAL_ACCESS_TOKEN=...
+SPOTIFY_CLIENT_ID=...
+SPOTIFY_CLIENT_SECRET=...
 ```
 
 On `tape`, Olaf needs ffmpeg and gcc. Its Makefile uses `-std=c11`, which hides `realpath` from gcc 14, so switch to `gnu11`:
