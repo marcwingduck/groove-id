@@ -142,7 +142,8 @@ def main():
         if not args.apply:
             continue
         new_path = os.path.join(base, new_name)
-        if new_path != path and os.path.exists(new_path):
+        # macOS ignores case: a rename that only changes it finds the album itself
+        if new_path != path and os.path.exists(new_path) and not os.path.samefile(new_path, path):
             print('  {} already exists, skipped'.format(new_name))
             continue
         tag_album(path, artist, year, album, folder_artist, overwrite=bool(release))
